@@ -1,0 +1,6 @@
+name: influx-migrate
+channels:
+  - conda-forge
+dependencies:
+  - pymysql
+  - influxdb-client

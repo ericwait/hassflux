@@ -1,0 +1,4 @@
+{
+  "sensor.example_temperature": "°F",
+  "sensor.example_humidity": "%"
+}
