@@ -3,6 +3,8 @@ from influxdb_client import InfluxDBClient
 import pymysql
 import json
 import os
+import csv
+from enum import Enum
 from datetime import datetime, timezone
 import time
 from pathlib import Path
@@ -10,6 +12,10 @@ from .config import settings
 from .database import get_influx_client, get_mariadb_connection
 
 tools_app = typer.Typer(help="Auxiliary tools for inspecting and verifying data.")
+
+class ExportFormat(str, Enum):
+    CSV = "csv"
+    MD = "md"
 
 @tools_app.command()
 def inspect_influx(
@@ -186,5 +192,62 @@ def audit():
         typer.echo(f"Total Unique Entities Found: {total_count}")
     except Exception as e:
         typer.echo(f"Error during audit: {e}")
+    finally:
+        client.close()
+
+@tools_app.command(name="export")
+def export_entities(
+    output: Path = typer.Option(..., "--output", "-o", help="Path to the output file."),
+    format: ExportFormat = typer.Option(ExportFormat.MD, "--format", "-f", help="Output format (csv or md).")
+):
+    """Export all entities in InfluxDB to a CSV or Markdown file."""
+    client = get_influx_client()
+    query_api = client.query_api()
+
+    query = f'''
+    from(bucket: "{settings.influx_bucket}")
+      |> range(start: 1970-01-01T00:00:00Z)
+      |> filter(fn: (r) => r["_field"] == "value")
+      |> group(columns: ["_measurement", "entity_id"])
+      |> distinct(column: "entity_id")
+      |> keep(columns: ["_measurement", "entity_id"])
+      |> group()
+      |> sort(columns: ["_measurement", "entity_id"])
+    '''
+    
+    typer.echo(f"Querying InfluxDB for all entities...")
+    
+    try:
+        tables = query_api.query(query)
+        data = []
+        for table in tables:
+            for record in table.records:
+                measurement = record.get_measurement()
+                entity_id = record.values.get("entity_id", "N/A")
+                data.append((measurement, entity_id))
+        
+        if not data:
+            typer.echo("No entities found to export.")
+            return
+
+        # Ensure directory exists
+        output.parent.mkdir(parents=True, exist_ok=True)
+
+        if format == ExportFormat.CSV:
+            with open(output, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["Measurement", "Entity ID"])
+                writer.writerows(data)
+        else:  # MD
+            with open(output, "w") as f:
+                f.write("| Measurement | Entity ID |\n")
+                f.write("|-------------|-----------|\n")
+                for m, eid in data:
+                    f.write(f"| {m} | {eid} |\n")
+        
+        typer.echo(f"Successfully exported {len(data)} entities to {output} (format: {format.value})")
+        
+    except Exception as e:
+        typer.echo(f"Error during export: {e}")
     finally:
         client.close()
